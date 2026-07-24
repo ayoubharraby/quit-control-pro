@@ -16,6 +16,15 @@ import {
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js";
 
+// OPTIONAL: FCM (client-side token capture)
+// To fully use FCM, you must add your VAPID key and a backend that sends messages.
+// See Firebase docs for details. [web:478][web:490][web:487][web:493]
+import {
+  getMessaging,
+  getToken,
+  onMessage,
+} from "https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging.js";
+
 const firebaseConfig = {
   apiKey: "AIzaSyDLJ7MVQGWHY9ooc2sRW0ivjomrqxVMG04",
   authDomain: "cig-quit.firebaseapp.com",
@@ -33,6 +42,7 @@ try {
 
 const auth = getAuth(fbApp);
 const db = getFirestore(fbApp);
+const messaging = getMessaging(fbApp);
 
 const state = {
   theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
@@ -44,6 +54,9 @@ const state = {
   config: null,
   user: null,
   mode: "unauth", // unauth | offline | user
+  notificationsEnabled: false,
+  localTimers: [],
+  fcmToken: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -61,14 +74,17 @@ const els = {
   sidebarOverlay: $("sidebarOverlay"),
   menuToggle: $("menuToggle"),
   resetBtn: $("resetBtn"),
+  notificationsBtn: $("notificationsBtn"),
   setupModal: $("setupModal"),
   openSetup: $("openSetup"),
   closeSetup: $("closeSetup"),
   themeToggle: $("themeToggle"),
   baseline: $("baseline"),
-  dayOneCap: $("dayOneCap"),
-  firstTime: $("firstTime"),
+  target: $("target"),
   totalDays: $("totalDays"),
+  modeSelect: $("mode"),
+  curve: $("curve"),
+  firstTime: $("firstTime"),
   wake: $("wake"),
   sleep: $("sleep"),
   weed: $("weed"),
@@ -77,12 +93,13 @@ const els = {
   customPattern: $("customPattern"),
   generatePlan: $("generatePlan"),
   loadDefault: $("loadDefault"),
+  setupHint: $("setupHint"),
   currentDayLabel: $("currentDayLabel"),
   capLabel: $("capLabel"),
   usedLabel: $("usedLabel"),
   remainingLabel: $("remainingLabel"),
   baselineStat: $("baselineStat"),
-  dayOneStat: $("dayOneStat"),
+  targetStat: $("targetStat"),
   nextSlotStat: $("nextSlotStat"),
   quitDayStat: $("quitDayStat"),
   heroPill: $("heroPill"),
@@ -90,6 +107,7 @@ const els = {
   countdownText: $("countdownText"),
   progressBar: $("progressBar"),
   dayTabs: $("dayTabs"),
+  daySelect: $("daySelect"),
   slotList: $("slotList"),
   planList: $("planList"),
   markSmoked: $("markSmoked"),
@@ -156,14 +174,16 @@ function applyPayload(payload) {
 
 function hydrateInputsFromConfig() {
   if (!state.config) return;
-  els.baseline.value = state.config.baseline ?? 0;
-  els.dayOneCap.value = state.config.dayOneCap ?? 0;
+  els.baseline.value = state.config.baseline ?? 20;
+  els.target.value = state.config.target ?? 0;
+  els.totalDays.value = state.config.totalDays ?? 10;
+  els.modeSelect.value = state.config.mode ?? "quit";
+  els.curve.value = state.config.curve ?? "linear";
   els.weed.value = state.config.weed ?? "0";
-  els.firstTime.value = state.config.firstTime ?? "08:00";
+  els.firstTime.value = state.config.firstTime ?? "11:42";
   els.wake.value = state.config.wake ?? "08:00";
   els.sleep.value = state.config.sleep ?? "21:30";
-  els.totalDays.value = state.config.totalDays ?? 1;
-  els.pattern.value = state.config.pattern ?? "0";
+  els.pattern.value = state.config.pattern ?? "auto";
   els.customPattern.value = state.config.customPattern ?? "";
   els.customWrap.hidden = els.pattern.value !== "custom";
 }
@@ -179,14 +199,16 @@ els.openSetup.onclick = () => els.setupModal.classList.add("open");
 els.closeSetup.onclick = () => els.setupModal.classList.remove("open");
 els.pattern.onchange = () => { els.customWrap.hidden = els.pattern.value !== "custom"; };
 els.loadDefault.onclick = () => {
-  els.baseline.value = 0;
-  els.dayOneCap.value = 0;
-  els.firstTime.value = "08:00";
-  els.totalDays.value = 1;
+  els.baseline.value = 20;
+  els.target.value = 0;
+  els.totalDays.value = 10;
+  els.modeSelect.value = "quit";
+  els.curve.value = "linear";
+  els.weed.value = "0";
+  els.firstTime.value = "11:42";
   els.wake.value = "08:00";
   els.sleep.value = "21:30";
-  els.weed.value = "0";
-  els.pattern.value = "0";
+  els.pattern.value = "auto";
   els.customPattern.value = "";
   els.customWrap.hidden = true;
 };
@@ -201,13 +223,39 @@ function fmtMinutes(mins) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
+/* Taper engine with linear/gentle/aggressive */
+function generateCapsFromCurve() {
+  const B = Number(els.baseline.value) || 0;
+  let T = Number(els.target.value) || 0;
+  const N = Number(els.totalDays.value) || 1;
+  const mode = els.modeSelect.value;
+
+  if (mode === "quit") T = 0;
+  if (N <= 1) return [Math.max(T, 0)];
+
+  const curve = els.curve.value;
+  const caps = [];
+
+  for (let i = 1; i <= N; i++) {
+    const p = (i - 1) / (N - 1);
+    let e = p;
+    if (curve === "gentle") {
+      e = 3 * p * p - 2 * p * p * p;
+    } else if (curve === "aggressive") {
+      e = Math.sqrt(p);
+    }
+    let cap = Math.round(B + (T - B) * e);
+    if (cap < 0) cap = 0;
+    caps.push(cap);
+  }
+  caps[N - 1] = Math.max(T, 0);
+  return caps;
+}
+
 function makePattern() {
   const total = Number(els.totalDays.value) || 1;
-  let caps;
-  if (els.pattern.value === "0") {
-    caps = new Array(total).fill(0);
-  } else {
-    caps = (els.pattern.value === "custom" ? els.customPattern.value : els.pattern.value)
+  if (els.pattern.value === "custom") {
+    let caps = els.customPattern.value
       .split(",")
       .map((v) => Number(v.trim()))
       .filter((v) => !Number.isNaN(v));
@@ -216,8 +264,9 @@ function makePattern() {
       const last = caps[caps.length - 1] ?? 0;
       while (caps.length < total) caps.push(last);
     }
+    return caps.slice(0, total);
   }
-  return caps.slice(0, total);
+  return generateCapsFromCurve();
 }
 
 function generatePlan() {
@@ -227,12 +276,16 @@ function generatePlan() {
   const first = parseMinutes(els.firstTime.value);
   const usableStart = Math.max(first, wake);
   const totalDays = Number(els.totalDays.value) || caps.length;
+  const B = Number(els.baseline.value) || 0;
+  const T = els.modeSelect.value === "quit" ? 0 : Number(els.target.value) || 0;
 
   state.config = {
-    baseline: Number(els.baseline.value) || 0,
-    dayOneCap: Number(els.dayOneCap.value) || 0,
+    baseline: B,
+    target: T,
+    mode: els.modeSelect.value,
+    curve: els.curve.value,
     weed: els.weed.value,
-    firstTime: els.firstTime.value || "08:00",
+    firstTime: els.firstTime.value || "11:42",
     wake: els.wake.value || "08:00",
     sleep: els.sleep.value || "21:30",
     totalDays,
@@ -263,20 +316,22 @@ function generatePlan() {
     }
 
     const phase =
-      cap === 0 ? "Quit" :
-      cap >= state.config.dayOneCap ? "Stabilize" :
-      cap >= 4 ? "Reduce" :
-      cap >= 2 ? "Stretch" : "Final";
+      state.config.mode === "quit" && cap === 0 ? "Quit" :
+      day === totalDays && cap === T && T > 0 ? "Target limit" :
+      cap >= B ? "Stabilize" :
+      cap >= T ? "Reduce" :
+      "Fine-tune";
 
     state.plan.push({ day, cap, phase, slots });
   }
 
-  state.config.quitDay = state.plan.length ? `Day ${state.plan.length}` : "—";
-  els.setupModal.classList.remove("open");
-  syncAll();
-}
-els.generatePlan.onclick = generatePlan;
+  state.config.quitDay = totalDays ? `Day ${totalDays}` : "—";
 
+  els.setupModal.classList.remove("open");
+  syncAll(true);
+}
+
+/* Accessors */
 function planFor(day) { return state.plan.find((p) => p.day === day); }
 function keyFor(day) { return `d${day}`; }
 function smoked(day) { return state.smoked[keyFor(day)] || []; }
@@ -289,13 +344,35 @@ function unresolved(day) {
     .filter((s) => !smoked(day).includes(s.index) && !skipped(day).includes(s.index));
 }
 
+/* Rendering */
+function renderDaySelect() {
+  els.daySelect.innerHTML = "";
+  if (!state.plan.length) return;
+  state.plan.forEach((p) => {
+    const opt = document.createElement("option");
+    opt.value = String(p.day);
+    opt.textContent = `Day ${p.day}`;
+    if (p.day === state.activeDay) opt.selected = true;
+    els.daySelect.appendChild(opt);
+  });
+}
+els.daySelect.onchange = () => {
+  state.activeDay = Number(els.daySelect.value) || 1;
+  syncAll();
+};
+
 function renderTabs() {
   els.dayTabs.innerHTML = "";
+  if (!state.plan.length) return;
   state.plan.forEach((p) => {
     const b = document.createElement("button");
     b.className = `tab ${p.day === state.activeDay ? "active" : ""}`;
     b.textContent = `Day ${p.day}`;
-    b.onclick = () => { state.activeDay = p.day; syncAll(); };
+    b.onclick = () => {
+      state.activeDay = p.day;
+      els.daySelect.value = String(p.day);
+      syncAll();
+    };
     els.dayTabs.appendChild(b);
   });
 }
@@ -310,7 +387,11 @@ function renderSlots() {
   }
   if (!p.slots.length) {
     els.slotList.innerHTML =
-      `<div class="rule"><strong>Day ${p.day}</strong><div class="muted">Zero cigarettes. Protect the line.</div></div>`;
+      `<div class="rule"><strong>Day ${p.day}</strong><div class="muted">${
+        state.config.mode === "quit" && p.day === state.config.totalDays
+          ? "Quit day. Zero cigarettes."
+          : "Zero cigarettes. Protect the line."
+      }</div></div>`;
     return;
   }
   p.slots.forEach((time, index) => {
@@ -350,10 +431,10 @@ function updateStats() {
     els.capLabel.textContent = "0";
     els.usedLabel.textContent = "0";
     els.remainingLabel.textContent = "0";
-    els.baselineStat.textContent = "0/day";
-    els.dayOneStat.textContent = "0";
+    els.baselineStat.textContent = `${state.config?.baseline ?? 0}/day`;
+    els.targetStat.textContent = `${state.config?.target ?? 0}/day`;
     els.nextSlotStat.textContent = "—";
-    els.quitDayStat.textContent = "—";
+    els.quitDayStat.textContent = state.config?.quitDay ?? "—";
     els.heroPill.textContent =
       state.mode === "offline"
         ? "Offline mode: everything starts at 0"
@@ -364,6 +445,7 @@ function updateStats() {
     );
     return;
   }
+
   const used = smoked(p.day).length;
   const remaining = Math.max(p.cap - used, 0);
   els.currentDayLabel.textContent = `Day ${p.day}`;
@@ -371,15 +453,22 @@ function updateStats() {
   els.usedLabel.textContent = used;
   els.remainingLabel.textContent = remaining;
   els.baselineStat.textContent = `${state.config?.baseline ?? 0}/day`;
-  els.dayOneStat.textContent = state.plan[0]?.cap ?? 0;
+  els.targetStat.textContent = `${state.config?.target ?? 0}/day`;
   els.nextSlotStat.textContent = unresolved(p.day)[0]?.time ?? "None";
   els.quitDayStat.textContent = state.config?.quitDay ?? "—";
+
+  const modeLabel =
+    state.config?.mode === "quit"
+      ? "Quit trajectory"
+      : `Limit to ${state.config?.target ?? 0}/day`;
   els.heroPill.textContent =
     state.config?.weed === "1"
-      ? "Weed still active: shut that front too"
-      : "Weed locked at 0";
+      ? `${modeLabel} • Weed still active`
+      : `${modeLabel} • Weed locked at 0`;
+
   els.scheduleSummary.textContent =
     `Day ${p.day}: ${p.cap} max, ${used} used, ${remaining} left`;
+
   const disable =
     !p.slots.length || !unresolved(p.day).length || p.cap === 0 || used >= p.cap;
   [els.markSmoked, els.markSkipped, els.markSmokedMobile, els.markSkippedMobile].forEach(
@@ -400,7 +489,10 @@ function updateCountdown() {
   }
   if (p.cap === 0 || !p.slots.length) {
     els.countdownClock.textContent = "00:00:00";
-    els.countdownText.textContent = "Quit day. No more cigarettes.";
+    els.countdownText.textContent =
+      state.config?.mode === "quit" && p.day === state.config.totalDays
+        ? "Quit day. No more cigarettes."
+        : "No cigarettes scheduled for this day.";
     els.progressBar.style.width = "100%";
     return;
   }
@@ -421,7 +513,7 @@ function updateCountdown() {
       ? parseMinutes(p.slots[prevIndex])
       : parseMinutes(
           state.activeDay === 1
-            ? state.config?.firstTime || "08:00"
+            ? state.config?.firstTime || "11:42"
             : state.config?.wake || "08:00"
         );
   const total = Math.max((next.mins - prevMin) * 60, 1);
@@ -439,6 +531,7 @@ function updateCountdown() {
   els.countdownText.textContent = `Next allowed cigarette at ${next.time}`;
 }
 
+/* Cravings */
 els.fillCraving.onclick = () => {
   els.craving.value =
     "Coffee + stress + grief spike. Wanted to light early. Stayed inside the slot rule.";
@@ -467,6 +560,7 @@ function renderLogs() {
   });
 }
 
+/* Actions */
 function mark(type) {
   const p = planFor(state.activeDay);
   if (!p) return;
@@ -481,6 +575,7 @@ function mark(type) {
 [els.markSkipped, els.markSkippedMobile].forEach((b) => (b.onclick = () => mark("skipped")));
 
 function renderRoot() {
+  renderDaySelect();
   renderTabs();
   renderSlots();
   renderPlanMap();
@@ -489,12 +584,83 @@ function renderRoot() {
   renderLogs();
 }
 
-function syncAll() {
+/* Notifications: local + FCM token */
+function clearLocalTimers() {
+  state.localTimers.forEach((id) => clearTimeout(id));
+  state.localTimers = [];
+}
+
+function scheduleLocalNotifications() {
+  clearLocalTimers();
+  if (!state.notificationsEnabled || !("Notification" in window)) return;
+
+  const now = new Date();
+  const nowMs = now.getTime();
+
+  state.plan.forEach((p) => {
+    p.slots.forEach((time, idx) => {
+      const [h, m] = time.split(":").map(Number);
+      const slotDate = new Date();
+      slotDate.setHours(h, m, 0, 0);
+      const delay = slotDate.getTime() - nowMs;
+      if (delay <= 0) return;
+
+      const id = setTimeout(() => {
+        new Notification("Cigarette slot open", {
+          body: `Day ${p.day}, slot #${idx + 1} at ${time}`,
+          tag: `slot-${p.day}-${idx}`,
+        });
+      }, delay);
+      state.localTimers.push(id);
+    });
+  });
+}
+
+async function enableNotifications() {
+  if (!("Notification" in window)) {
+    alert("Notifications are not supported in this browser.");
+    return;
+  }
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    alert("Notifications not enabled. Please allow them in your browser.");
+    return;
+  }
+  state.notificationsEnabled = true;
+  scheduleLocalNotifications();
+
+  // FCM token (for server-side push, if you add a backend) [web:478][web:487][web:493]
+  try {
+    const token = await getToken(messaging, {
+      vapidKey: "YOUR_PUBLIC_VAPID_KEY_HERE", // replace in Firebase console [web:478][web:490]
+    });
+    state.fcmToken = token;
+    if (state.user) {
+      await setDoc(
+        doc(db, "quitPlans", state.user.uid),
+        { fcmToken: token, fcmUpdatedAt: serverTimestamp() },
+        { merge: true }
+      );
+    }
+  } catch (e) {
+    console.warn("FCM token error", e);
+  }
+}
+els.notificationsBtn.onclick = enableNotifications;
+
+// Foreground FCM messages (optional UI hook) [web:487][web:490]
+onMessage(messaging, (payload) => {
+  console.log("FCM message received in foreground", payload);
+});
+
+function syncAll(fromSetup = false) {
   if (state.mode === "user") saveStateLocal();
   renderRoot();
   if (state.mode === "user" && state.user) saveStateCloud();
+  if (fromSetup) scheduleLocalNotifications();
 }
 
+/* Cloud sync */
 async function saveStateCloud() {
   if (!state.user) return;
   const ref = doc(db, "quitPlans", state.user.uid);
@@ -525,7 +691,7 @@ async function getCloudPayloadRaw(uid) {
   }
 }
 
-/* ===== Auth UI & gate ===== */
+/* Auth UI & gate */
 function updateAuthUI() {
   if (state.mode === "user" && state.user) {
     els.authStatus.textContent = `Signed in as ${state.user.email}`;
@@ -581,6 +747,14 @@ async function doSignIn(email, pass) {
   return cred.user;
 }
 
+/* Setup prompt for new users & after reset */
+function openSetupPrompt(firstTime = false) {
+  els.setupModal.classList.add("open");
+  els.setupHint.textContent = firstTime
+    ? "New profile: set a realistic target and days. You can always regenerate the plan."
+    : "Reset completed. Adjust your baseline, target, and days, then regenerate the plan.";
+}
+
 els.gateSubmitBtn.onclick = async () => {
   hideGateError();
   const email = els.gateEmail.value.trim();
@@ -592,7 +766,7 @@ els.gateSubmitBtn.onclick = async () => {
   try {
     if (gateMode === "signup") {
       const user = await doSignUp(email, pass);
-      await initializeNewUserState(user);
+      await initializeNewUserState(user, true);
     } else {
       await doSignIn(email, pass);
     }
@@ -606,6 +780,7 @@ els.gateContinueBtn.onclick = () => {
   try { localStorage.setItem(OFFLINE_FLAG, "1"); } catch (e) {}
   initOfflineZeroState();
   showApp();
+  openSetupPrompt(true);
 };
 
 els.btnSignUp.onclick = async () => {
@@ -614,7 +789,7 @@ els.btnSignUp.onclick = async () => {
   if (!email || !pass) return;
   try {
     const user = await doSignUp(email, pass);
-    await initializeNewUserState(user);
+    await initializeNewUserState(user, true);
   } catch (e) {
     alert("Sign-up failed: " + e.message);
   }
@@ -660,14 +835,13 @@ els.resetBtn.onclick = async () => {
   );
   if (!ok) return;
 
+  clearLocalTimers();
   state.plan = [];
   state.smoked = {};
   state.skipped = {};
   state.logs = [];
   state.config = null;
   state.activeDay = 1;
-
-  els.loadDefault.click();
 
   if (state.mode === "user" && state.user) {
     try {
@@ -676,7 +850,9 @@ els.resetBtn.onclick = async () => {
     } catch (e) {}
   }
 
-  generatePlan();
+  setTheme(state.theme);
+  renderRoot();
+  openSetupPrompt(false);
 };
 
 function initOfflineZeroState() {
@@ -688,30 +864,18 @@ function initOfflineZeroState() {
   state.logs = [];
   state.config = null;
   state.activeDay = 1;
-  els.loadDefault.click();
   setTheme(state.theme);
   renderRoot();
   updateAuthUI();
 }
 
-async function initializeNewUserState(user) {
+async function initializeNewUserState(user, firstTime) {
   state.user = user;
   state.mode = "user";
-  // Fresh zero baseline with default taper pattern
-  els.baseline.value = 20;
-  els.dayOneCap.value = 6;
-  els.firstTime.value = "11:42";
-  els.totalDays.value = 10;
-  els.wake.value = "08:00";
-  els.sleep.value = "21:30";
-  els.weed.value = "0";
-  els.pattern.value = "6,6,6,4,4,3,3,2,1,0";
-  els.customPattern.value = "";
-  els.customWrap.hidden = true;
-  generatePlan();
-  await saveStateCloud();
+  setTheme(state.theme);
   updateAuthUI();
   showApp();
+  openSetupPrompt(firstTime);
 }
 
 async function handleUserAuth(user) {
@@ -726,7 +890,7 @@ async function handleUserAuth(user) {
       applyPayload(localPayload);
       await saveStateCloud();
     } else {
-      await initializeNewUserState(user);
+      await initializeNewUserState(user, true);
       return;
     }
   }
@@ -747,6 +911,7 @@ onAuthStateChanged(auth, async (user) => {
   if (offlineFlag === "1") {
     initOfflineZeroState();
     showApp();
+    openSetupPrompt(true);
   } else {
     state.mode = "unauth";
     updateAuthUI();
@@ -754,4 +919,7 @@ onAuthStateChanged(auth, async (user) => {
   }
 });
 
+els.generatePlan.onclick = () => generatePlan();
+
+setTheme(state.theme);
 setInterval(updateCountdown, 1000);
