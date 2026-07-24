@@ -163,6 +163,14 @@
                 <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
               </svg>
             </button>
+            <button class="icon-btn" id="notificationsBtn" aria-label="Enable notifications">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" stroke-width="2">
+                <path d="M12 22a2 2 0 0 0 2-2H10a2 2 0 0 0 2 2Z"></path>
+                <path d="M18 16v-3a6 6 0 0 0-12 0v3"></path>
+                <path d="M5 16h14"></path>
+              </svg>
+            </button>
             <button class="theme-toggle" id="themeToggle" aria-label="Switch theme">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
                    stroke="currentColor" stroke-width="2">
@@ -186,15 +194,15 @@
                   <strong id="baselineStat">0/day</strong>
                 </div>
                 <div class="kpi">
-                  <div class="tiny">Day-one cap</div>
-                  <strong id="dayOneStat">0</strong>
+                  <div class="tiny">Target</div>
+                  <strong id="targetStat">0/day</strong>
                 </div>
                 <div class="kpi">
                   <div class="tiny">Next slot</div>
                   <strong id="nextSlotStat">—</strong>
                 </div>
                 <div class="kpi">
-                  <div class="tiny">Quit day</div>
+                  <div class="tiny">Target day</div>
                   <strong id="quitDayStat">—</strong>
                 </div>
               </div>
@@ -220,7 +228,15 @@
                 <h2 class="section-title">Schedule</h2>
                 <div class="tiny" id="scheduleSummary">Generated from setup</div>
               </div>
+
+              <!-- Mobile: day select; Desktop: optional horizontal tabs -->
+              <div class="field day-picker">
+                <label for="daySelect">Day</label>
+                <select id="daySelect"></select>
+              </div>
+
               <div class="tabs" id="dayTabs"></div>
+
               <div class="slot-list" id="slotList"></div>
             </div>
             <div class="panel">
@@ -252,8 +268,8 @@
                   <div class="muted">Timing comes from first-cigarette time, wake time, sleep cutoff, and cap.</div>
                 </div>
                 <div class="rule">
-                  <strong>Quit day stays fixed.</strong>
-                  <div class="muted">The endpoint must remain visible and non-negotiable.</div>
+                  <strong>Target stays visible.</strong>
+                  <div class="muted">Whether quit or limit, the endpoint is fixed and non-negotiable.</div>
                 </div>
               </div>
             </div>
@@ -282,7 +298,7 @@
             </div>
             <p class="muted">
               Quit Control Pro is a structured cigarette taper tool: hard daily caps, generated time slots,
-              and a fixed quit day so the plan stays non-negotiable.
+              and a fixed target day so the plan stays non-negotiable.
             </p>
             <div class="about-footer">
               <div>
@@ -309,13 +325,14 @@
       <button class="btn btn-secondary" id="markSkippedMobile">Skip</button>
     </div>
 
+    <!-- Setup modal with linear/gentle/aggressive + target -->
     <div class="modal-backdrop" id="setupModal" role="dialog"
          aria-modal="true" aria-labelledby="setupTitle">
       <div class="modal">
         <div class="modal-header">
           <div>
             <div class="tiny">Initial state collection</div>
-            <h2 class="title" id="setupTitle">Set up the taper properly</h2>
+            <h2 class="title" id="setupTitle">Set up your taper or limit</h2>
           </div>
           <button class="icon-btn" id="closeSetup" aria-label="Close setup">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
@@ -328,35 +345,36 @@
         <div class="form-grid">
           <div class="two-col">
             <div class="field">
-              <label for="baseline">Average cigarettes/day before taper</label>
-              <input id="baseline" type="number" min="0" value="0">
+              <label for="baseline">Baseline cigarettes/day</label>
+              <input id="baseline" type="number" min="0" value="20">
             </div>
             <div class="field">
-              <label for="dayOneCap">Day 1 cap</label>
-              <input id="dayOneCap" type="number" min="0" value="0">
+              <label for="target">Target cigarettes/day</label>
+              <input id="target" type="number" min="0" value="0">
             </div>
           </div>
           <div class="two-col">
             <div class="field">
-              <label for="firstTime">First cigarette time today</label>
-              <input id="firstTime" type="time" value="08:00">
+              <label for="totalDays">Total days</label>
+              <input id="totalDays" type="number" min="1" max="365" value="10">
             </div>
             <div class="field">
-              <label for="totalDays">Total taper days</label>
-              <input id="totalDays" type="number" min="1" max="21" value="1">
+              <label for="mode">Mode</label>
+              <select id="mode">
+                <option value="quit" selected>Quit completely (target 0)</option>
+                <option value="limit">Limit use to target/day</option>
+              </select>
             </div>
           </div>
           <div class="two-col">
             <div class="field">
-              <label for="wake">Wake time</label>
-              <input id="wake" type="time" value="08:00">
+              <label for="curve">Curve style</label>
+              <select id="curve">
+                <option value="linear" selected>Linear</option>
+                <option value="gentle">Gentle (slow start, faster end)</option>
+                <option value="aggressive">Aggressive (fast cuts early)</option>
+              </select>
             </div>
-            <div class="field">
-              <label for="sleep">Sleep cutoff</label>
-              <input id="sleep" type="time" value="21:30">
-            </div>
-          </div>
-          <div class="two-col">
             <div class="field">
               <label for="weed">Weed status</label>
               <select id="weed">
@@ -364,27 +382,43 @@
                 <option value="1">Still using</option>
               </select>
             </div>
+          </div>
+          <div class="two-col">
             <div class="field">
-              <label for="pattern">Taper pattern</label>
+              <label for="firstTime">First cigarette time today</label>
+              <input id="firstTime" type="time" value="11:42">
+            </div>
+            <div class="field">
+              <label for="wake">Wake time</label>
+              <input id="wake" type="time" value="08:00">
+            </div>
+          </div>
+          <div class="two-col">
+            <div class="field">
+              <label for="sleep">Sleep cutoff</label>
+              <input id="sleep" type="time" value="21:30">
+            </div>
+            <div class="field">
+              <label for="pattern">Custom pattern (optional)</label>
               <select id="pattern">
-                <option value="0" selected>Zero for offline default</option>
-                <option value="6,6,6,4,4,3,3,2,1,0">6 → 4 → 3 → 2 → 1 → 0</option>
-                <option value="6,6,5,5,4,4,3,2,1,0">
-                  Smoother 6 → 5 → 4 → 3 → 2 → 1 → 0
-                </option>
-                <option value="custom">Custom list</option>
+                <option value="auto" selected>Use calculated pattern</option>
+                <option value="custom">Custom caps list</option>
               </select>
             </div>
           </div>
           <div class="field" id="customWrap" hidden>
             <label for="customPattern">Custom daily caps, comma-separated</label>
             <input id="customPattern" type="text"
-                   placeholder="Example: 6,6,5,4,4,3,2,1,0">
+                   placeholder="Example: 25,25,24,24,23,...">
           </div>
           <div class="btn-row">
             <button class="btn btn-primary" id="generatePlan">Generate plan</button>
-            <button class="btn btn-secondary" id="loadDefault">Load default</button>
+            <button class="btn btn-secondary" id="loadDefault">Load default taper</button>
           </div>
+          <p class="tiny" id="setupHint">
+            New users: start with your true baseline and a realistic number of days. The curve just changes
+            how quickly you drop towards the target.
+          </p>
         </div>
       </div>
     </div>
