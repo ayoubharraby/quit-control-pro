@@ -223,30 +223,31 @@
           </section>
 
           <section class="grid">
-            <div class="panel">
-              <div class="section-head">
-                <h2 class="section-title">Schedule</h2>
-                <div class="tiny" id="scheduleSummary">Generated from setup</div>
-              </div>
+  <div class="panel">
+    <div class="section-head">
+      <h2 class="section-title">Schedule</h2>
+      <div class="tiny" id="scheduleSummary">Generated from setup</div>
+    </div>
 
-              <!-- Mobile: day select; Desktop: optional horizontal tabs -->
-              <div class="field day-picker">
-                <label for="daySelect">Day</label>
-                <select id="daySelect"></select>
-              </div>
+    <!-- Mobile: day select; Desktop: horizontal tabs -->
+    <div class="day-controls">
+      <div class="field day-picker">
+        <label for="daySelect">Day</label>
+        <select id="daySelect"></select>
+      </div>
+      <div class="tabs" id="dayTabs"></div>
+    </div>
 
-              <div class="tabs" id="dayTabs"></div>
-
-              <div class="slot-list" id="slotList"></div>
-            </div>
-            <div class="panel">
-              <div class="section-head">
-                <h2 class="section-title">Plan map</h2>
-                <div class="tiny">Caps by day</div>
-              </div>
-              <div class="plan-list" id="planList"></div>
-            </div>
-          </section>
+    <div class="slot-list" id="slotList"></div>
+  </div>
+  <div class="panel">
+    <div class="section-head">
+      <h2 class="section-title">Plan map</h2>
+      <div class="tiny">Caps by day</div>
+    </div>
+    <div class="plan-list" id="planList"></div>
+  </div>
+</section>
 
           <section class="grid">
             <div class="panel">
