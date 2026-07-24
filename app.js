@@ -228,7 +228,7 @@ function fmtMinutes(mins) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-/* Taper engine */
+/* Taper engine: linear, gentle, aggressive */
 function generateCapsFromCurve() {
   const B = Number(els.baseline.value) || 0;
   let T = Number(els.target.value) || 0;
@@ -698,16 +698,14 @@ async function getCloudPayloadRaw(uid) {
 /* Auth UI & gate */
 function updateAuthUI() {
   if (state.mode === "user" && state.user) {
-    els.authStatus.textContent = `Signed in as ${state.user.email}`;
+    els.authStatus.textContent = `Signed in`;
     els.sidebarAuthForm.style.display = "none";
     els.btnSignOut.style.display = "block";
     els.authHint.textContent =
       "Progress is synced to your private cloud profile.";
 
     const email = state.user.email || "";
-    const initials = email
-      ? email[0].toUpperCase()
-      : "A";
+    const initials = email ? email[0].toUpperCase() : "A";
     els.accountInitials.textContent = initials;
     els.accountInitialsMenu.textContent = initials;
     els.accountEmailMenu.textContent = email;
@@ -724,7 +722,7 @@ function updateAuthUI() {
     els.sidebarAuthForm.style.display = "block";
     els.btnSignOut.style.display = "none";
     els.authHint.textContent =
-      "Not required; the app works offline. Sign in only if you want cross‑device sync.";
+      "Offline by default. Sign in only if you want cross‑device sync.";
     els.accountDropdown.style.display = "none";
   }
 }
@@ -754,7 +752,7 @@ els.gateTabSignUp.onclick = () => {
 };
 
 async function doSignUp(email, pass) {
-  await setPersistence(auth, browserSessionPersistence); // session-only [web:523][web:533][web:538]
+  await setPersistence(auth, browserSessionPersistence); // session-only [web:523][web:540][web:533]
   const cred = await createUserWithEmailAndPassword(auth, email, pass);
   return cred.user;
 }
@@ -948,7 +946,6 @@ async function handleUserAuth(user) {
 
 onAuthStateChanged(auth, async (user) => {
   if (user) {
-    // Session persistence: only active while tab is open, not across browser restarts. [web:523][web:540]
     await handleUserAuth(user);
     return;
   }
