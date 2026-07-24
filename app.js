@@ -67,9 +67,9 @@ const STORAGE_KEY = "quit-control-pro-state";
 
 // ----- Firebase config (replace with your project) -----
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
+  apiKey: "AIzaSyDLJ7MVQGWHY9ooc2sRW0ivjomrqxVMG04",
+  authDomain: "cig-quit.firebaseapp.com",
+  projectId: "cig-quit",
 };
 
 firebase.initializeApp(firebaseConfig);
