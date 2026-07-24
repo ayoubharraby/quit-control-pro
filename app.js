@@ -1,3 +1,37 @@
+// ----- Firebase (modular v9) -----
+import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
+import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
+import {
+  getAuth,
+  onAuthStateChanged,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+} from "https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js";
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  serverTimestamp,
+} from "https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js";
+
+// Your config (from Firebase console)
+const firebaseConfig = {
+  apiKey: "AIzaSyDLJ7MVQGWHY9ooc2sRW0ivjomrqxVMG04",
+  authDomain: "cig-quit.firebaseapp.com",
+  projectId: "cig-quit",
+  storageBucket: "cig-quit.firebasestorage.app",
+  messagingSenderId: "733695667533",
+  appId: "1:733695667533:web:8d14eaea212a4559311b04",
+  measurementId: "G-3C36NB645K",
+};
+
+const app = initializeApp(firebaseConfig);
+const analytics = getAnalytics(app);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
 // ----- Core local state -----
 const state = {
   theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
@@ -7,8 +41,8 @@ const state = {
   skipped: {},
   plan: [],
   config: null,
-  user: null,      // Firebase user
-  cloudLoaded: false
+  user: null,
+  cloudLoaded: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -64,17 +98,6 @@ const els = {
 };
 
 const STORAGE_KEY = "quit-control-pro-state";
-
-// ----- Firebase config (replace with your project) -----
-const firebaseConfig = {
-  apiKey: "AIzaSyDLJ7MVQGWHY9ooc2sRW0ivjomrqxVMG04",
-  authDomain: "cig-quit.firebaseapp.com",
-  projectId: "cig-quit",
-};
-
-firebase.initializeApp(firebaseConfig);
-const auth = firebase.auth();
-const db = firebase.firestore();
 
 // ----- Local persistence -----
 function saveStateLocal() {
@@ -466,10 +489,10 @@ function mark(type) {
   (b) => (b.onclick = () => mark("skipped"))
 );
 
-// ----- Firebase sync helpers -----
+// ----- Cloud sync (Firestore) -----
 async function saveStateCloud() {
   if (!state.user) return;
-  const docRef = db.collection("quitPlans").doc(state.user.uid);
+  const ref = doc(db, "quitPlans", state.user.uid);
   const payload = {
     theme: state.theme,
     activeDay: state.activeDay,
@@ -478,24 +501,21 @@ async function saveStateCloud() {
     smoked: state.smoked,
     skipped: state.skipped,
     logs: state.logs,
-    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    updatedAt: serverTimestamp(),
   };
   try {
-    await docRef.set(payload, { merge: true });
-  } catch (e) {
-    // cloud save failure is non-fatal
-  }
+    await setDoc(ref, payload, { merge: true });
+  } catch (e) {}
 }
 
 async function loadStateCloud() {
   if (!state.user) return false;
-  const docRef = db.collection("quitPlans").doc(state.user.uid);
+  const ref = doc(db, "quitPlans", state.user.uid);
   try {
-    const snap = await docRef.get();
-    if (!snap.exists) return false;
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return false;
     const payload = snap.data();
     if (!Array.isArray(payload.plan)) return false;
-
     state.theme = payload.theme || state.theme;
     state.activeDay = payload.activeDay || 1;
     state.config = payload.config || null;
@@ -512,7 +532,7 @@ async function loadStateCloud() {
 
 function syncAll() {
   saveStateLocal();
-  render();
+  renderRoot();
   if (state.user) {
     saveStateCloud();
   }
@@ -537,7 +557,7 @@ els.btnSignUp.onclick = async () => {
   const pass = els.authPassword.value;
   if (!email || !pass) return;
   try {
-    const cred = await auth.createUserWithEmailAndPassword(email, pass);
+    const cred = await createUserWithEmailAndPassword(auth, email, pass);
     state.user = cred.user;
     updateAuthUI();
     await saveStateCloud();
@@ -551,30 +571,28 @@ els.btnSignIn.onclick = async () => {
   const pass = els.authPassword.value;
   if (!email || !pass) return;
   try {
-    const cred = await auth.signInWithEmailAndPassword(email, pass);
+    const cred = await signInWithEmailAndPassword(auth, email, pass);
     state.user = cred.user;
     updateAuthUI();
-    // Try cloud first; if no cloud data, keep local
     const loaded = await loadStateCloud();
     if (!loaded) {
-      saveStateCloud();
+      await saveStateCloud();
     }
     hydrateInputsFromConfig();
     setTheme(state.theme || "light");
-    render();
+    renderRoot();
   } catch (e) {
     alert("Sign-in failed: " + e.message);
   }
 };
 
 els.btnSignOut.onclick = async () => {
-  await auth.signOut();
+  await signOut(auth);
   state.user = null;
   updateAuthUI();
 };
 
-// Observe auth state changes
-auth.onAuthStateChanged(async (user) => {
+onAuthStateChanged(auth, async (user) => {
   state.user = user || null;
   updateAuthUI();
   if (user && !state.cloudLoaded) {
@@ -582,14 +600,14 @@ auth.onAuthStateChanged(async (user) => {
     if (loaded) {
       hydrateInputsFromConfig();
       setTheme(state.theme || "light");
-      render();
+      renderRoot();
       return;
     }
     await saveStateCloud();
   }
 });
 
-// ----- Render root -----
+// ----- Root render -----
 function renderRoot() {
   renderTabs();
   renderSlots();
