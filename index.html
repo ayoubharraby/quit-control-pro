@@ -177,6 +177,25 @@
                 <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
               </svg>
             </button>
+
+            <!-- Avatar / account dropdown trigger -->
+            <div class="account-dropdown" id="accountDropdown">
+              <button class="avatar-btn" id="accountBtn" aria-label="Account">
+                <span class="avatar-initials" id="accountInitials">A</span>
+              </button>
+              <div class="account-menu" id="accountMenu">
+                <div class="account-menu-header">
+                  <div class="avatar-circle">
+                    <span id="accountInitialsMenu">A</span>
+                  </div>
+                  <div>
+                    <div class="tiny">Signed in as</div>
+                    <div class="account-email" id="accountEmailMenu">you@example.com</div>
+                  </div>
+                </div>
+                <button class="account-action" id="accountSignOut">Sign out</button>
+              </div>
+            </div>
           </div>
         </header>
 
@@ -223,31 +242,30 @@
           </section>
 
           <section class="grid">
-  <div class="panel">
-    <div class="section-head">
-      <h2 class="section-title">Schedule</h2>
-      <div class="tiny" id="scheduleSummary">Generated from setup</div>
-    </div>
+            <div class="panel">
+              <div class="section-head">
+                <h2 class="section-title">Schedule</h2>
+                <div class="tiny" id="scheduleSummary">Generated from setup</div>
+              </div>
 
-    <!-- Mobile: day select; Desktop: horizontal tabs -->
-    <div class="day-controls">
-      <div class="field day-picker">
-        <label for="daySelect">Day</label>
-        <select id="daySelect"></select>
-      </div>
-      <div class="tabs" id="dayTabs"></div>
-    </div>
+              <div class="day-controls">
+                <div class="field day-picker">
+                  <label for="daySelect">Day</label>
+                  <select id="daySelect"></select>
+                </div>
+                <div class="tabs" id="dayTabs"></div>
+              </div>
 
-    <div class="slot-list" id="slotList"></div>
-  </div>
-  <div class="panel">
-    <div class="section-head">
-      <h2 class="section-title">Plan map</h2>
-      <div class="tiny">Caps by day</div>
-    </div>
-    <div class="plan-list" id="planList"></div>
-  </div>
-</section>
+              <div class="slot-list" id="slotList"></div>
+            </div>
+            <div class="panel">
+              <div class="section-head">
+                <h2 class="section-title">Plan map</h2>
+                <div class="tiny">Caps by day</div>
+              </div>
+              <div class="plan-list" id="planList"></div>
+            </div>
+          </section>
 
           <section class="grid">
             <div class="panel">
@@ -326,7 +344,7 @@
       <button class="btn btn-secondary" id="markSkippedMobile">Skip</button>
     </div>
 
-    <!-- Setup modal with linear/gentle/aggressive + target -->
+    <!-- Setup modal -->
     <div class="modal-backdrop" id="setupModal" role="dialog"
          aria-modal="true" aria-labelledby="setupTitle">
       <div class="modal">
