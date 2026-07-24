@@ -1,6 +1,5 @@
-// ----- Firebase (modular v9) -----
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
-import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
+import { getAnalytics, isSupported as analyticsIsSupported } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics.js";
 import {
   getAuth,
   onAuthStateChanged,
@@ -13,10 +12,10 @@ import {
   doc,
   getDoc,
   setDoc,
+  deleteDoc,
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js";
 
-// Your config (from Firebase console)
 const firebaseConfig = {
   apiKey: "AIzaSyDLJ7MVQGWHY9ooc2sRW0ivjomrqxVMG04",
   authDomain: "cig-quit.firebaseapp.com",
@@ -27,12 +26,13 @@ const firebaseConfig = {
   measurementId: "G-3C36NB645K",
 };
 
-const app = initializeApp(firebaseConfig);
-const analytics = getAnalytics(app);
-const auth = getAuth(app);
-const db = getFirestore(app);
+const fbApp = initializeApp(firebaseConfig);
+try {
+  analyticsIsSupported().then((ok) => { if (ok) getAnalytics(fbApp); });
+} catch (e) {}
+const auth = getAuth(fbApp);
+const db = getFirestore(fbApp);
 
-// ----- Core local state -----
 const state = {
   theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
   activeDay: 1,
@@ -42,11 +42,26 @@ const state = {
   plan: [],
   config: null,
   user: null,
-  cloudLoaded: false,
 };
 
 const $ = (id) => document.getElementById(id);
 const els = {
+  authGate: $("authGate"),
+  gateTabSignIn: $("gateTabSignIn"),
+  gateTabSignUp: $("gateTabSignUp"),
+  gateEmail: $("gateEmail"),
+  gatePassword: $("gatePassword"),
+  gateError: $("gateError"),
+  gateSubmitBtn: $("gateSubmitBtn"),
+  gateContinueBtn: $("gateContinueBtn"),
+  appRoot: $("appRoot"),
+  conflictModal: $("conflictModal"),
+  conflictUseCloud: $("conflictUseCloud"),
+  conflictUseDevice: $("conflictUseDevice"),
+  sidebar: $("sidebar"),
+  sidebarOverlay: $("sidebarOverlay"),
+  menuToggle: $("menuToggle"),
+  resetBtn: $("resetBtn"),
   setupModal: $("setupModal"),
   openSetup: $("openSetup"),
   closeSetup: $("closeSetup"),
@@ -95,11 +110,24 @@ const els = {
   btnSignOut: $("btnSignOut"),
   authStatus: $("authStatus"),
   authHint: $("authHint"),
+  sidebarAuthForm: $("sidebarAuthForm"),
 };
 
 const STORAGE_KEY = "quit-control-pro-state";
+const OFFLINE_FLAG = "qcp-offline-mode";
 
-// ----- Local persistence -----
+function getLocalPayloadRaw() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const payload = JSON.parse(raw);
+    if (!Array.isArray(payload.plan)) return null;
+    return payload;
+  } catch (e) {
+    return null;
+  }
+}
+
 function saveStateLocal() {
   const payload = {
     theme: state.theme,
@@ -115,23 +143,14 @@ function saveStateLocal() {
   } catch (e) {}
 }
 
-function loadStateLocal() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return false;
-    const payload = JSON.parse(raw);
-    if (!Array.isArray(payload.plan)) return false;
-    state.theme = payload.theme || state.theme;
-    state.activeDay = payload.activeDay || 1;
-    state.config = payload.config || null;
-    state.plan = payload.plan || [];
-    state.smoked = payload.smoked || {};
-    state.skipped = payload.skipped || {};
-    state.logs = payload.logs || [];
-    return true;
-  } catch (e) {
-    return false;
-  }
+function applyPayload(payload) {
+  state.theme = payload.theme || state.theme;
+  state.activeDay = payload.activeDay || 1;
+  state.config = payload.config || null;
+  state.plan = payload.plan || [];
+  state.smoked = payload.smoked || {};
+  state.skipped = payload.skipped || {};
+  state.logs = payload.logs || [];
 }
 
 function hydrateInputsFromConfig() {
@@ -148,21 +167,16 @@ function hydrateInputsFromConfig() {
   els.customWrap.hidden = els.pattern.value !== "custom";
 }
 
-// ----- Theme -----
 function setTheme(t) {
   state.theme = t;
   document.documentElement.setAttribute("data-theme", t);
   saveStateLocal();
 }
 
-els.themeToggle.onclick = () =>
-  setTheme(state.theme === "dark" ? "light" : "dark");
-
+els.themeToggle.onclick = () => setTheme(state.theme === "dark" ? "light" : "dark");
 els.openSetup.onclick = () => els.setupModal.classList.add("open");
 els.closeSetup.onclick = () => els.setupModal.classList.remove("open");
-els.pattern.onchange = () => {
-  els.customWrap.hidden = els.pattern.value !== "custom";
-};
+els.pattern.onchange = () => { els.customWrap.hidden = els.pattern.value !== "custom"; };
 els.loadDefault.onclick = () => {
   els.baseline.value = 20;
   els.dayOneCap.value = 6;
@@ -176,7 +190,6 @@ els.loadDefault.onclick = () => {
   els.customWrap.hidden = true;
 };
 
-// ----- Time helpers -----
 function parseMinutes(t) {
   const [h, m] = String(t).split(":").map(Number);
   return h * 60 + m;
@@ -187,14 +200,9 @@ function fmtMinutes(mins) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-// ----- Pattern & plan -----
 function makePattern() {
   const total = Number(els.totalDays.value) || 10;
-  let caps = (
-    els.pattern.value === "custom"
-      ? els.customPattern.value
-      : els.pattern.value
-  )
+  let caps = (els.pattern.value === "custom" ? els.customPattern.value : els.pattern.value)
     .split(",")
     .map((v) => Number(v.trim()))
     .filter((v) => !Number.isNaN(v));
@@ -249,59 +257,39 @@ function generatePlan() {
     }
 
     const phase =
-      cap === 0
-        ? "Quit"
-        : cap >= state.config.dayOneCap
-        ? "Stabilize"
-        : cap >= 4
-        ? "Reduce"
-        : cap >= 2
-        ? "Stretch"
-        : "Final";
+      cap === 0 ? "Quit" :
+      cap >= state.config.dayOneCap ? "Stabilize" :
+      cap >= 4 ? "Reduce" :
+      cap >= 2 ? "Stretch" : "Final";
 
     state.plan.push({ day, cap, phase, slots });
   }
 
   state.config.quitDay = `Day ${state.plan.length}`;
   els.setupModal.classList.remove("open");
-
   syncAll();
 }
+els.generatePlan.onclick = generatePlan;
 
-// ----- Accessors -----
-function planFor(day) {
-  return state.plan.find((p) => p.day === day);
-}
-function keyFor(day) {
-  return `d${day}`;
-}
-function smoked(day) {
-  return state.smoked[keyFor(day)] || [];
-}
-function skipped(day) {
-  return state.skipped[keyFor(day)] || [];
-}
+function planFor(day) { return state.plan.find((p) => p.day === day); }
+function keyFor(day) { return `d${day}`; }
+function smoked(day) { return state.smoked[keyFor(day)] || []; }
+function skipped(day) { return state.skipped[keyFor(day)] || []; }
 function unresolved(day) {
   const p = planFor(day);
   if (!p) return [];
   return p.slots
     .map((time, index) => ({ time, index, mins: parseMinutes(time) }))
-    .filter(
-      (s) => !smoked(day).includes(s.index) && !skipped(day).includes(s.index)
-    );
+    .filter((s) => !smoked(day).includes(s.index) && !skipped(day).includes(s.index));
 }
 
-// ----- Rendering -----
 function renderTabs() {
   els.dayTabs.innerHTML = "";
   state.plan.forEach((p) => {
     const b = document.createElement("button");
     b.className = `tab ${p.day === state.activeDay ? "active" : ""}`;
     b.textContent = `Day ${p.day}`;
-    b.onclick = () => {
-      state.activeDay = p.day;
-      syncAll();
-    };
+    b.onclick = () => { state.activeDay = p.day; syncAll(); };
     els.dayTabs.appendChild(b);
   });
 }
@@ -310,14 +298,11 @@ function renderSlots() {
   const p = planFor(state.activeDay);
   els.slotList.innerHTML = "";
   if (!p) {
-    els.slotList.innerHTML =
-      '<div class="rule"><strong>No plan yet</strong><div class="muted">Complete setup to generate the schedule.</div></div>';
+    els.slotList.innerHTML = '<div class="rule"><strong>No plan yet</strong><div class="muted">Complete setup to generate the schedule.</div></div>';
     return;
   }
   if (!p.slots.length) {
-    els.slotList.innerHTML = `<div class="rule"><strong>Day ${
-      p.day
-    }</strong><div class="muted">Zero cigarettes. Protect the line.</div></div>`;
+    els.slotList.innerHTML = `<div class="rule"><strong>Day ${p.day}</strong><div class="muted">Zero cigarettes. Protect the line.</div></div>`;
     return;
   }
   p.slots.forEach((time, index) => {
@@ -325,14 +310,7 @@ function renderSlots() {
     const done = smoked(p.day).includes(index);
     const skip = skipped(p.day).includes(index);
     row.className = `slot ${done ? "done" : ""} ${skip ? "skipped" : ""}`;
-    row.innerHTML = `
-      <div class="pill">#${index + 1}</div>
-      <div>
-        <strong>${time}</strong>
-        <div class="tiny">${done ? "Used" : skip ? "Skipped, gone" : "Pending"}</div>
-      </div>
-      <div class="slot-status">${done ? "Used" : skip ? "Skipped" : "Pending"}</div>
-    `;
+    row.innerHTML = `<div class="pill">#${index + 1}</div><div><strong>${time}</strong><div class="tiny">${done ? "Used" : skip ? "Skipped, gone" : "Pending"}</div></div><div class="slot-status">${done ? "Used" : skip ? "Skipped" : "Pending"}</div>`;
     els.slotList.appendChild(row);
   });
 }
@@ -342,12 +320,7 @@ function renderPlanMap() {
   state.plan.forEach((p) => {
     const row = document.createElement("div");
     row.className = "rule";
-    row.innerHTML = `
-      <strong>Day ${p.day}</strong>
-      <div class="muted">Cap ${p.cap}. ${p.phase}. ${
-      p.slots.length ? p.slots.join(" · ") : "No cigarettes."
-    }</div>
-    `;
+    row.innerHTML = `<strong>Day ${p.day}</strong><div class="muted">Cap ${p.cap}. ${p.phase}. ${p.slots.length ? p.slots.join(" · ") : "No cigarettes."}</div>`;
     els.planList.appendChild(row);
   });
 }
@@ -355,46 +328,26 @@ function renderPlanMap() {
 function updateStats() {
   const p = planFor(state.activeDay);
   if (!p) return;
-
   const used = smoked(p.day).length;
   const remaining = Math.max(p.cap - used, 0);
-
   els.currentDayLabel.textContent = `Day ${p.day}`;
   els.capLabel.textContent = p.cap;
   els.usedLabel.textContent = used;
   els.remainingLabel.textContent = remaining;
-
   els.baselineStat.textContent = `${state.config?.baseline ?? 20}/day`;
   els.dayOneStat.textContent = state.plan[0]?.cap ?? 6;
   els.nextSlotStat.textContent = unresolved(p.day)[0]?.time ?? "None";
   els.quitDayStat.textContent = state.config?.quitDay ?? `Day ${state.plan.length || 10}`;
-  els.heroPill.textContent =
-    state.config?.weed === "1"
-      ? "Weed still active: shut that front too"
-      : "Weed locked at 0";
-
+  els.heroPill.textContent = state.config?.weed === "1" ? "Weed still active: shut that front too" : "Weed locked at 0";
   els.scheduleSummary.textContent = `Day ${p.day}: ${p.cap} max, ${used} used, ${remaining} left`;
-
-  const disable =
-    !p.slots.length ||
-    !unresolved(p.day).length ||
-    p.cap === 0 ||
-    used >= p.cap;
-
-  [els.markSmoked, els.markSkipped, els.markSmokedMobile, els.markSkippedMobile].forEach(
-    (b) => (b.disabled = disable)
-  );
-  els.actionHint.textContent = disable
-    ? "No open slot to act on right now."
-    : "One cigarette per slot. Skipped means gone.";
+  const disable = !p.slots.length || !unresolved(p.day).length || p.cap === 0 || used >= p.cap;
+  [els.markSmoked, els.markSkipped, els.markSmokedMobile, els.markSkippedMobile].forEach((b) => (b.disabled = disable));
+  els.actionHint.textContent = disable ? "No open slot to act on right now." : "One cigarette per slot. Skipped means gone.";
 }
 
 function updateCountdown() {
   const p = planFor(state.activeDay);
-  if (!p) {
-    els.countdownText.textContent = "Generate a plan first.";
-    return;
-  }
+  if (!p) { els.countdownText.textContent = "Generate a plan first."; return; }
   if (p.cap === 0 || !p.slots.length) {
     els.countdownClock.textContent = "00:00:00";
     els.countdownText.textContent = "Quit day. No more cigarettes.";
@@ -408,26 +361,17 @@ function updateCountdown() {
     els.progressBar.style.width = "100%";
     return;
   }
-
   const now = new Date();
   const nowMin = now.getHours() * 60 + now.getMinutes();
   let diff = (next.mins - nowMin) * 60 - now.getSeconds();
-
   const resolved = [...smoked(p.day), ...skipped(p.day)].sort((a, b) => a - b);
   const prevIndex = resolved.length ? resolved[resolved.length - 1] : -1;
-  const prevMin =
-    prevIndex >= 0
-      ? parseMinutes(p.slots[prevIndex])
-      : parseMinutes(
-          state.activeDay === 1
-            ? state.config?.firstTime || "11:42"
-            : state.config?.wake || "08:00"
-        );
-
+  const prevMin = prevIndex >= 0
+    ? parseMinutes(p.slots[prevIndex])
+    : parseMinutes(state.activeDay === 1 ? state.config?.firstTime || "11:42" : state.config?.wake || "08:00");
   const total = Math.max((next.mins - prevMin) * 60, 1);
   const elapsed = Math.min(Math.max(total - diff, 0), total);
   els.progressBar.style.width = `${(elapsed / total) * 100}%`;
-
   if (diff <= 0) {
     els.countdownClock.textContent = "00:00:00";
     els.countdownText.textContent = `Slot open now: ${next.time}`;
@@ -440,10 +384,8 @@ function updateCountdown() {
   els.countdownText.textContent = `Next allowed cigarette at ${next.time}`;
 }
 
-// ----- Cravings -----
 els.fillCraving.onclick = () => {
-  els.craving.value =
-    "Coffee + stress + grief spike. Wanted to light early. Stayed inside the slot rule.";
+  els.craving.value = "Coffee + stress + grief spike. Wanted to light early. Stayed inside the slot rule.";
   els.craving.focus();
 };
 els.saveCraving.onclick = () => {
@@ -457,8 +399,7 @@ els.saveCraving.onclick = () => {
 function renderLogs() {
   els.logList.innerHTML = "";
   if (!state.logs.length) {
-    els.logList.innerHTML =
-      '<div class="entry"><strong>No cravings logged yet</strong><div class="muted">Log the wave instead of negotiating with it.</div></div>';
+    els.logList.innerHTML = '<div class="entry"><strong>No cravings logged yet</strong><div class="muted">Log the wave instead of negotiating with it.</div></div>';
     return;
   }
   [...state.logs].reverse().forEach((item) => {
@@ -469,27 +410,34 @@ function renderLogs() {
   });
 }
 
-// ----- Actions -----
 function mark(type) {
   const p = planFor(state.activeDay);
   if (!p) return;
   const next = unresolved(p.day)[0];
   if (!next) return;
-
   const bucket = type === "smoked" ? state.smoked : state.skipped;
   const key = keyFor(p.day);
   bucket[key] = [...(bucket[key] || []), next.index];
-
   syncAll();
 }
-[els.markSmoked, els.markSmokedMobile].forEach(
-  (b) => (b.onclick = () => mark("smoked"))
-);
-[els.markSkipped, els.markSkippedMobile].forEach(
-  (b) => (b.onclick = () => mark("skipped"))
-);
+[els.markSmoked, els.markSmokedMobile].forEach((b) => (b.onclick = () => mark("smoked")));
+[els.markSkipped, els.markSkippedMobile].forEach((b) => (b.onclick = () => mark("skipped")));
 
-// ----- Cloud sync (Firestore) -----
+function renderRoot() {
+  renderTabs();
+  renderSlots();
+  renderPlanMap();
+  updateStats();
+  updateCountdown();
+  renderLogs();
+}
+
+function syncAll() {
+  saveStateLocal();
+  renderRoot();
+  if (state.user) saveStateCloud();
+}
+
 async function saveStateCloud() {
   if (!state.user) return;
   const ref = doc(db, "quitPlans", state.user.uid);
@@ -503,128 +451,215 @@ async function saveStateCloud() {
     logs: state.logs,
     updatedAt: serverTimestamp(),
   };
-  try {
-    await setDoc(ref, payload, { merge: true });
-  } catch (e) {}
+  try { await setDoc(ref, payload, { merge: true }); } catch (e) {}
 }
 
-async function loadStateCloud() {
-  if (!state.user) return false;
-  const ref = doc(db, "quitPlans", state.user.uid);
+async function getCloudPayloadRaw(uid) {
   try {
-    const snap = await getDoc(ref);
-    if (!snap.exists()) return false;
+    const snap = await getDoc(doc(db, "quitPlans", uid));
+    if (!snap.exists()) return null;
     const payload = snap.data();
-    if (!Array.isArray(payload.plan)) return false;
-    state.theme = payload.theme || state.theme;
-    state.activeDay = payload.activeDay || 1;
-    state.config = payload.config || null;
-    state.plan = payload.plan || [];
-    state.smoked = payload.smoked || {};
-    state.skipped = payload.skipped || {};
-    state.logs = payload.logs || [];
-    state.cloudLoaded = true;
-    return true;
+    if (!Array.isArray(payload.plan)) return null;
+    return payload;
   } catch (e) {
-    return false;
+    return null;
   }
 }
 
-function syncAll() {
-  saveStateLocal();
+function payloadsMatch(a, b) {
+  if (!a || !b) return false;
+  const norm = (p) => JSON.stringify({ plan: p.plan, smoked: p.smoked, skipped: p.skipped, config: p.config });
+  return norm(a) === norm(b);
+}
+
+function openConflictModal() {
+  return new Promise((resolve) => {
+    els.conflictModal.classList.add("open");
+    const cleanup = () => els.conflictModal.classList.remove("open");
+    els.conflictUseCloud.onclick = () => { cleanup(); resolve("cloud"); };
+    els.conflictUseDevice.onclick = () => { cleanup(); resolve("device"); };
+  });
+}
+
+async function resolveAuthData(user) {
+  const localPayload = getLocalPayloadRaw();
+  const cloudPayload = await getCloudPayloadRaw(user.uid);
+
+  if (cloudPayload && localPayload) {
+    if (payloadsMatch(localPayload, cloudPayload)) {
+      applyPayload(cloudPayload);
+      saveStateLocal();
+    } else {
+      const choice = await openConflictModal();
+      if (choice === "cloud") {
+        applyPayload(cloudPayload);
+        saveStateLocal();
+      } else {
+        applyPayload(localPayload);
+        await saveStateCloud();
+      }
+    }
+  } else if (cloudPayload) {
+    applyPayload(cloudPayload);
+    saveStateLocal();
+  } else if (localPayload) {
+    applyPayload(localPayload);
+    await saveStateCloud();
+  } else {
+    generatePlan();
+    await saveStateCloud();
+    return;
+  }
+
+  hydrateInputsFromConfig();
+  setTheme(state.theme || "light");
   renderRoot();
-  if (state.user) {
-    saveStateCloud();
+}
+
+function initOfflineLocal() {
+  const localPayload = getLocalPayloadRaw();
+  if (localPayload) {
+    applyPayload(localPayload);
+    hydrateInputsFromConfig();
+    setTheme(state.theme || "light");
+    renderRoot();
+  } else {
+    setTheme(state.theme);
+    generatePlan();
   }
 }
 
-// ----- Auth UI -----
 function updateAuthUI() {
   if (state.user) {
     els.authStatus.textContent = `Signed in as ${state.user.email}`;
+    els.sidebarAuthForm.style.display = "none";
     els.btnSignOut.style.display = "block";
     els.authHint.textContent = "Progress is synced to your private cloud profile.";
   } else {
     els.authStatus.textContent = "Offline only";
+    els.sidebarAuthForm.style.display = "block";
     els.btnSignOut.style.display = "none";
-    els.authHint.textContent =
-      "Not required; the app works offline. Sign in only if you want to sync progress across devices.";
+    els.authHint.textContent = "Not required; the app works offline.";
   }
 }
+
+function showGateError(msg) {
+  els.gateError.textContent = msg;
+  els.gateError.hidden = false;
+}
+function hideGateError() {
+  els.gateError.hidden = true;
+}
+
+let gateMode = "signin";
+els.gateTabSignIn.onclick = () => {
+  gateMode = "signin";
+  els.gateTabSignIn.classList.add("active");
+  els.gateTabSignUp.classList.remove("active");
+  els.gateSubmitBtn.textContent = "Sign in";
+  hideGateError();
+};
+els.gateTabSignUp.onclick = () => {
+  gateMode = "signup";
+  els.gateTabSignUp.classList.add("active");
+  els.gateTabSignIn.classList.remove("active");
+  els.gateSubmitBtn.textContent = "Create account";
+  hideGateError();
+};
+
+async function doSignUp(email, pass) {
+  const cred = await createUserWithEmailAndPassword(auth, email, pass);
+  return cred.user;
+}
+async function doSignIn(email, pass) {
+  const cred = await signInWithEmailAndPassword(auth, email, pass);
+  return cred.user;
+}
+
+els.gateSubmitBtn.onclick = async () => {
+  hideGateError();
+  const email = els.gateEmail.value.trim();
+  const pass = els.gatePassword.value;
+  if (!email || !pass) { showGateError("Enter both email and password."); return; }
+  try {
+    if (gateMode === "signup") await doSignUp(email, pass);
+    else await doSignIn(email, pass);
+    // onAuthStateChanged will pick this up and show the app
+  } catch (e) {
+    showGateError(e.message.replace("Firebase: ", ""));
+  }
+};
+
+els.gateContinueBtn.onclick = () => {
+  localStorage.setItem(OFFLINE_FLAG, "1");
+  initOfflineLocal();
+  showApp();
+};
 
 els.btnSignUp.onclick = async () => {
   const email = els.authEmail.value.trim();
   const pass = els.authPassword.value;
   if (!email || !pass) return;
-  try {
-    const cred = await createUserWithEmailAndPassword(auth, email, pass);
-    state.user = cred.user;
-    updateAuthUI();
-    await saveStateCloud();
-  } catch (e) {
-    alert("Sign-up failed: " + e.message);
-  }
+  try { await doSignUp(email, pass); } catch (e) { alert("Sign-up failed: " + e.message); }
 };
-
 els.btnSignIn.onclick = async () => {
   const email = els.authEmail.value.trim();
   const pass = els.authPassword.value;
   if (!email || !pass) return;
-  try {
-    const cred = await signInWithEmailAndPassword(auth, email, pass);
-    state.user = cred.user;
-    updateAuthUI();
-    const loaded = await loadStateCloud();
-    if (!loaded) {
-      await saveStateCloud();
-    }
-    hydrateInputsFromConfig();
-    setTheme(state.theme || "light");
-    renderRoot();
-  } catch (e) {
-    alert("Sign-in failed: " + e.message);
-  }
+  try { await doSignIn(email, pass); } catch (e) { alert("Sign-in failed: " + e.message); }
 };
-
 els.btnSignOut.onclick = async () => {
   await signOut(auth);
   state.user = null;
   updateAuthUI();
 };
 
+function showGate() { els.authGate.style.display = "flex"; els.appRoot.hidden = true; }
+function showApp() { els.authGate.style.display = "none"; els.appRoot.hidden = false; }
+
+els.menuToggle.onclick = () => {
+  els.sidebar.classList.add("open");
+  els.sidebarOverlay.classList.add("open");
+};
+els.sidebarOverlay.onclick = () => {
+  els.sidebar.classList.remove("open");
+  els.sidebarOverlay.classList.remove("open");
+};
+
+els.resetBtn.onclick = async () => {
+  const ok = confirm("Reset all progress and setup? This clears local data and, if signed in, your cloud profile. This cannot be undone.");
+  if (!ok) return;
+  try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+  state.plan = [];
+  state.smoked = {};
+  state.skipped = {};
+  state.logs = [];
+  state.config = null;
+  state.activeDay = 1;
+  els.loadDefault.click();
+  if (state.user) {
+    try { await deleteDoc(doc(db, "quitPlans", state.user.uid)); } catch (e) {}
+  }
+  generatePlan();
+};
+
 onAuthStateChanged(auth, async (user) => {
   state.user = user || null;
   updateAuthUI();
-  if (user && !state.cloudLoaded) {
-    const loaded = await loadStateCloud();
-    if (loaded) {
-      hydrateInputsFromConfig();
-      setTheme(state.theme || "light");
-      renderRoot();
-      return;
-    }
-    await saveStateCloud();
+
+  if (user) {
+    await resolveAuthData(user);
+    showApp();
+    return;
+  }
+
+  const offlineFlag = localStorage.getItem(OFFLINE_FLAG);
+  if (offlineFlag) {
+    initOfflineLocal();
+    showApp();
+  } else {
+    showGate();
   }
 });
-
-// ----- Root render -----
-function renderRoot() {
-  renderTabs();
-  renderSlots();
-  renderPlanMap();
-  updateStats();
-  updateCountdown();
-  renderLogs();
-}
-
-// ----- Startup -----
-if (!loadStateLocal()) {
-  setTheme(state.theme);
-  generatePlan();
-} else {
-  hydrateInputsFromConfig();
-  setTheme(state.theme || "light");
-  renderRoot();
-}
 
 setInterval(updateCountdown, 1000);
