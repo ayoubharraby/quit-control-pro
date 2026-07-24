@@ -6,6 +6,8 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut,
+  setPersistence,
+  browserSessionPersistence,
 } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js";
 import {
   getFirestore,
@@ -15,10 +17,6 @@ import {
   deleteDoc,
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore.js";
-
-// OPTIONAL: FCM (client-side token capture)
-// To fully use FCM, you must add your VAPID key and a backend that sends messages.
-// See Firebase docs for details. [web:478][web:490][web:487][web:493]
 import {
   getMessaging,
   getToken,
@@ -128,6 +126,13 @@ const els = {
   authStatus: $("authStatus"),
   authHint: $("authHint"),
   sidebarAuthForm: $("sidebarAuthForm"),
+  accountDropdown: $("accountDropdown"),
+  accountBtn: $("accountBtn"),
+  accountMenu: $("accountMenu"),
+  accountInitials: $("accountInitials"),
+  accountInitialsMenu: $("accountInitialsMenu"),
+  accountEmailMenu: $("accountEmailMenu"),
+  accountSignOut: $("accountSignOut"),
 };
 
 const STORAGE_KEY = "quit-control-pro-state";
@@ -223,7 +228,7 @@ function fmtMinutes(mins) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-/* Taper engine with linear/gentle/aggressive */
+/* Taper engine */
 function generateCapsFromCurve() {
   const B = Number(els.baseline.value) || 0;
   let T = Number(els.target.value) || 0;
@@ -277,12 +282,13 @@ function generatePlan() {
   const usableStart = Math.max(first, wake);
   const totalDays = Number(els.totalDays.value) || caps.length;
   const B = Number(els.baseline.value) || 0;
-  const T = els.modeSelect.value === "quit" ? 0 : Number(els.target.value) || 0;
+  const mode = els.modeSelect.value;
+  const T = mode === "quit" ? 0 : Number(els.target.value) || 0;
 
   state.config = {
     baseline: B,
     target: T,
-    mode: els.modeSelect.value,
+    mode,
     curve: els.curve.value,
     weed: els.weed.value,
     firstTime: els.firstTime.value || "11:42",
@@ -316,7 +322,7 @@ function generatePlan() {
     }
 
     const phase =
-      state.config.mode === "quit" && cap === 0 ? "Quit" :
+      mode === "quit" && cap === 0 ? "Quit" :
       day === totalDays && cap === T && T > 0 ? "Target limit" :
       cap >= B ? "Stabilize" :
       cap >= T ? "Reduce" :
@@ -584,7 +590,7 @@ function renderRoot() {
   renderLogs();
 }
 
-/* Notifications: local + FCM token */
+/* Notifications */
 function clearLocalTimers() {
   state.localTimers.forEach((id) => clearTimeout(id));
   state.localTimers = [];
@@ -629,10 +635,9 @@ async function enableNotifications() {
   state.notificationsEnabled = true;
   scheduleLocalNotifications();
 
-  // FCM token (for server-side push, if you add a backend) [web:478][web:487][web:493]
   try {
     const token = await getToken(messaging, {
-      vapidKey: "YOUR_PUBLIC_VAPID_KEY_HERE", // replace in Firebase console [web:478][web:490]
+      vapidKey: "YOUR_PUBLIC_VAPID_KEY_HERE",
     });
     state.fcmToken = token;
     if (state.user) {
@@ -648,9 +653,8 @@ async function enableNotifications() {
 }
 els.notificationsBtn.onclick = enableNotifications;
 
-// Foreground FCM messages (optional UI hook) [web:487][web:490]
 onMessage(messaging, (payload) => {
-  console.log("FCM message received in foreground", payload);
+  console.log("FCM foreground message", payload);
 });
 
 function syncAll(fromSetup = false) {
@@ -699,18 +703,29 @@ function updateAuthUI() {
     els.btnSignOut.style.display = "block";
     els.authHint.textContent =
       "Progress is synced to your private cloud profile.";
+
+    const email = state.user.email || "";
+    const initials = email
+      ? email[0].toUpperCase()
+      : "A";
+    els.accountInitials.textContent = initials;
+    els.accountInitialsMenu.textContent = initials;
+    els.accountEmailMenu.textContent = email;
+    els.accountDropdown.style.display = "block";
   } else if (state.mode === "offline") {
     els.authStatus.textContent = "Offline mode";
     els.sidebarAuthForm.style.display = "block";
     els.btnSignOut.style.display = "none";
     els.authHint.textContent =
       "Offline profile: everything stays on this browser until you sign in.";
+    els.accountDropdown.style.display = "none";
   } else {
     els.authStatus.textContent = "Offline only";
     els.sidebarAuthForm.style.display = "block";
     els.btnSignOut.style.display = "none";
     els.authHint.textContent =
       "Not required; the app works offline. Sign in only if you want cross‑device sync.";
+    els.accountDropdown.style.display = "none";
   }
 }
 
@@ -739,21 +754,51 @@ els.gateTabSignUp.onclick = () => {
 };
 
 async function doSignUp(email, pass) {
+  await setPersistence(auth, browserSessionPersistence); // session-only [web:523][web:533][web:538]
   const cred = await createUserWithEmailAndPassword(auth, email, pass);
   return cred.user;
 }
 async function doSignIn(email, pass) {
+  await setPersistence(auth, browserSessionPersistence);
   const cred = await signInWithEmailAndPassword(auth, email, pass);
   return cred.user;
 }
 
-/* Setup prompt for new users & after reset */
+/* Setup prompt */
 function openSetupPrompt(firstTime = false) {
   els.setupModal.classList.add("open");
   els.setupHint.textContent = firstTime
     ? "New profile: set a realistic target and days. You can always regenerate the plan."
     : "Reset completed. Adjust your baseline, target, and days, then regenerate the plan.";
 }
+
+/* Account dropdown interactions */
+els.accountBtn.onclick = () => {
+  if (!state.user) {
+    // If not signed in, open sidebar auth form instead
+    els.sidebar.classList.add("open");
+    els.sidebarOverlay.classList.add("open");
+    return;
+  }
+  const open = els.accountDropdown.classList.contains("open");
+  if (open) {
+    els.accountDropdown.classList.remove("open");
+  } else {
+    els.accountDropdown.classList.add("open");
+  }
+};
+document.addEventListener("click", (ev) => {
+  if (!els.accountDropdown) return;
+  if (ev.target === els.accountBtn || els.accountDropdown.contains(ev.target)) return;
+  els.accountDropdown.classList.remove("open");
+});
+els.accountSignOut.onclick = async () => {
+  await signOut(auth);
+  state.user = null;
+  state.mode = "offline";
+  updateAuthUI();
+  els.accountDropdown.classList.remove("open");
+};
 
 els.gateSubmitBtn.onclick = async () => {
   hideGateError();
@@ -903,6 +948,7 @@ async function handleUserAuth(user) {
 
 onAuthStateChanged(auth, async (user) => {
   if (user) {
+    // Session persistence: only active while tab is open, not across browser restarts. [web:523][web:540]
     await handleUserAuth(user);
     return;
   }
